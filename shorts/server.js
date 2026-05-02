@@ -81,13 +81,17 @@ const feedCache   = new Map(); // cacheKey → { items, ts }
 const FEED_TTL_MS = 20 * 60 * 1000; // 20 min
 
 async function getFeed(page, location) {
-  const kw       = SEARCH_KEYWORDS[page % SEARCH_KEYWORDS.length];
+  const kwIndex  = page % SEARCH_KEYWORDS.length;
+  const kwRound  = Math.floor(page / SEARCH_KEYWORDS.length);
+  const kw       = SEARCH_KEYWORDS[kwIndex];
   const query    = `${location} ${kw}`;
-  const cacheKey = query;
+  const start    = kwRound * 20 + 1;   // 1, 21, 41, 61 … per keyword cycle
+  const end      = start + 39;
+  const cacheKey = `${query}:${start}`;
   const hit      = feedCache.get(cacheKey);
   if (hit && Date.now() - hit.ts < FEED_TTL_MS) return hit.items;
 
-  console.log(`  fetching feed page ${page}: "${query}"`);
+  console.log(`  fetching feed page ${page}: "${query}" items ${start}-${end}`);
 
   const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}&sp=${SHORTS_SP}`;
 
@@ -97,7 +101,7 @@ async function getFeed(page, location) {
     '--dump-json',
     '--no-warnings',
     '--quiet',
-    '--playlist-items', '1-40',
+    '--playlist-items', `${start}-${end}`,
   ], 45_000);
 
   const items = raw

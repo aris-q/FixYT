@@ -108,14 +108,14 @@ html, body {
   cursor: pointer;
 }
 
-/* Blurred thumbnail placeholder fills entire card bg */
+/* Thumbnail kept in DOM for fallback but hidden — never shown before playback */
 .card-thumb {
   position: absolute;
   inset: 0;
   background-size: cover;
   background-position: center;
   z-index: 0;
-  transition: opacity .3s;
+  opacity: 0;
 }
 
 .card-thumb::after {

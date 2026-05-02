@@ -9,6 +9,7 @@ const state = {
   globalMuted: true,
   totalLoaded: 0,
   location:    '',
+  seenIds:     new Set(),
 };
 
 // ── API ───────────────────────────────────────────────────────────────────────
@@ -25,13 +26,20 @@ async function apiFetch(path, timeoutMs = 45_000) {
 
 // ── Feed ──────────────────────────────────────────────────────────────────────
 
-async function fetchBatch() {
+async function fetchBatch(retries = 5) {
   if (state.isFetching) return;
   state.isFetching = true;
   try {
     const data = await apiFetch(`/api/feed?page=${state.feedPage}&location=${encodeURIComponent(state.location)}`);
     state.feedPage++;
-    appendCards(data.items ?? []);
+    const added = appendCards(data.items ?? []);
+    // Sentinel stays visible but observer won't re-fire if nothing was added;
+    // advance to the next page automatically (up to retries times).
+    if (added === 0 && retries > 0) {
+      state.isFetching = false;
+      fetchBatch(retries - 1);
+      return;
+    }
   } catch (err) {
     console.error('[feed]', err.message);
     if (state.totalLoaded === 0) showError();
@@ -111,13 +119,18 @@ function createCard(item) {
 function appendCards(items) {
   const feed     = document.getElementById('feed');
   const sentinel = document.getElementById('sentinel');
+  let added = 0;
   items.forEach(item => {
+    if (state.seenIds.has(item.videoId)) return;
+    state.seenIds.add(item.videoId);
     const card = createCard(item);
     if (!card) return;
     feed.insertBefore(card, sentinel);
     playObserver.observe(card);
     state.totalLoaded++;
+    added++;
   });
+  return added;
 }
 
 // ── Stream loading ────────────────────────────────────────────────────────────
@@ -186,11 +199,9 @@ async function activateCard(card) {
   if (!ok) return;
 
   const video = card.querySelector('.card-video');
-  const thumb = card.querySelector('.card-thumb');
 
   video.muted = state.globalMuted;
   video.style.display = 'block';
-  thumb.style.opacity = '0';
 
   video.play().catch(() => {
     // Autoplay blocked — fall back to muted
@@ -233,7 +244,7 @@ const playObserver = new IntersectionObserver(entries => {
 
 const sentinelObserver = new IntersectionObserver(entries => {
   if (entries[0].isIntersecting) fetchBatch();
-}, { threshold: 0.1 });
+}, { threshold: 0, root: document.getElementById('feed'), rootMargin: '0px 0px 300% 0px' });
 
 // ── Mute ──────────────────────────────────────────────────────────────────────
 
