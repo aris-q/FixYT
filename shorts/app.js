@@ -8,6 +8,7 @@ const state = {
   isFetching:  false,
   globalMuted: true,
   totalLoaded: 0,
+  location:    '',
 };
 
 // ── API ───────────────────────────────────────────────────────────────────────
@@ -28,7 +29,7 @@ async function fetchBatch() {
   if (state.isFetching) return;
   state.isFetching = true;
   try {
-    const data = await apiFetch(`/api/feed?page=${state.feedPage}`);
+    const data = await apiFetch(`/api/feed?page=${state.feedPage}&location=${encodeURIComponent(state.location)}`);
     state.feedPage++;
     appendCards(data.items ?? []);
   } catch (err) {
@@ -113,32 +114,54 @@ function appendCards(items) {
 
 // ── Stream loading ────────────────────────────────────────────────────────────
 
-async function loadStream(card) {
-  if (card.dataset.streamLoaded) return true;
+function loadStream(card) {
+  if (card.dataset.streamLoaded) return Promise.resolve(true);
 
   const spinner = card.querySelector('.card-spinner');
+  const video   = card.querySelector('.card-video');
+
   spinner.classList.add('active');
 
-  try {
-    const { url } = await apiFetch(`/api/stream?v=${card.dataset.videoId}`, 35_000);
-    const video   = card.querySelector('.card-video');
-    video.muted   = state.globalMuted;
-    // Set src directly — <video> skips CORS checks for media, so the
-    // direct googlevideo.com URL plays without Access-Control-Allow-Origin.
-    video.src = url;
-    card.dataset.streamLoaded = '1';
-    spinner.classList.remove('active');
-    return true;
-  } catch (err) {
-    console.error('[stream]', card.dataset.videoId, err.message);
-    spinner.classList.remove('active');
-    return false;
+  if (!video.src) {
+    video.src   = `/api/proxy?v=${card.dataset.videoId}`;
+    video.muted = state.globalMuted;
+  }
+
+  return new Promise(resolve => {
+    video.addEventListener('canplay', () => {
+      spinner.classList.remove('active');
+      card.dataset.streamLoaded = '1';
+      resolve(true);
+    }, { once: true });
+    video.addEventListener('error', () => {
+      spinner.classList.remove('active');
+      resolve(false);
+    }, { once: true });
+  });
+}
+
+// ── Prefetch ──────────────────────────────────────────────────────────────────
+
+function prefetchAhead(card, count = 2) {
+  let el = card.nextElementSibling;
+  let remaining = count;
+  while (el && remaining > 0) {
+    if (el.classList.contains('short-card')) {
+      const video = el.querySelector('.card-video');
+      if (!video.src) {
+        video.src   = `/api/proxy?v=${el.dataset.videoId}`;
+        video.muted = state.globalMuted;
+      }
+      remaining--;
+    }
+    el = el.nextElementSibling;
   }
 }
 
 // ── Playback control ──────────────────────────────────────────────────────────
 
 async function activateCard(card) {
+  prefetchAhead(card);
   const ok = await loadStream(card);
   if (!ok) return;
 
@@ -256,10 +279,30 @@ document.getElementById('retry-btn').addEventListener('click', () => {
   location.reload();
 });
 
+// ── Location picker ───────────────────────────────────────────────────────────
+
+function submitLocation(loc) {
+  loc = loc.trim();
+  if (!loc) return;
+  state.location = loc;
+  document.getElementById('location-picker').classList.add('hidden');
+  document.getElementById('initial-loading').style.display = 'flex';
+  document.querySelector('.header-title').textContent = loc;
+  init();
+}
+
+document.getElementById('location-form').addEventListener('submit', e => {
+  e.preventDefault();
+  submitLocation(document.getElementById('location-input').value);
+});
+
+document.querySelectorAll('.lp-chip').forEach(chip => {
+  chip.addEventListener('click', () => submitLocation(chip.dataset.loc));
+});
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 async function init() {
-  // Sentinel for infinite scroll
   const feed     = document.getElementById('feed');
   const sentinel = document.createElement('div');
   sentinel.id    = 'sentinel';
@@ -270,5 +313,3 @@ async function init() {
   await fetchBatch();
   document.getElementById('initial-loading').style.display = 'none';
 }
-
-init();

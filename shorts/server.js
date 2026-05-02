@@ -61,37 +61,50 @@ function ytdlp(args, timeoutMs = 40_000) {
 
 // ── Feed ────────────────────────────────────────────────────────────────────
 
-// Hashtag pages return real Shorts (verified by yt-dlp author)
-const FEED_SOURCES = [
-  'https://www.youtube.com/hashtag/shorts',
-  'https://www.youtube.com/hashtag/youtubeshorts',
-  'https://www.youtube.com/hashtag/trending',
-  'https://www.youtube.com/hashtag/viral',
-  'https://www.youtube.com/hashtag/funny',
-  'https://www.youtube.com/hashtag/satisfying',
+// Keywords that surface high-quality destination content
+const SEARCH_KEYWORDS = [
+  'travel guide',
+  'things to do',
+  'travel vlog',
+  'hidden gems',
+  'must visit',
+  'travel tips',
 ];
 
-const feedCache   = new Map(); // source → { items, ts }
+// YouTube's protobuf filter for Shorts-only search results
+const SHORTS_SP = 'EgIYAQ%3D%3D';
+
+// Minimum views to exclude low-quality / spam videos
+const MIN_VIEWS = 100_000;
+
+const feedCache   = new Map(); // cacheKey → { items, ts }
 const FEED_TTL_MS = 20 * 60 * 1000; // 20 min
 
-async function getFeed(page) {
-  const source = FEED_SOURCES[page % FEED_SOURCES.length];
-  const hit    = feedCache.get(source);
+async function getFeed(page, location) {
+  const kw       = SEARCH_KEYWORDS[page % SEARCH_KEYWORDS.length];
+  const query    = `${location} ${kw}`;
+  const cacheKey = query;
+  const hit      = feedCache.get(cacheKey);
   if (hit && Date.now() - hit.ts < FEED_TTL_MS) return hit.items;
 
-  console.log(`  fetching feed page ${page}: ${source}`);
+  console.log(`  fetching feed page ${page}: "${query}"`);
+
+  const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}&sp=${SHORTS_SP}`;
 
   const raw = await ytdlp([
-    source,
+    searchUrl,
     '--flat-playlist',
     '--dump-json',
     '--no-warnings',
     '--quiet',
-    '--playlist-items', '1-25',
+    '--playlist-items', '1-40',
   ], 45_000);
 
   const items = raw
     .filter(v => v.id && v.duration != null && v.duration > 1 && v.duration <= 90)
+    .filter(v => v.view_count == null || v.view_count >= MIN_VIEWS)
+    .sort((a, b) => (b.view_count ?? 0) - (a.view_count ?? 0))
+    .slice(0, 20)
     .map(v => ({
       videoId:   v.id,
       title:     v.title || '',
@@ -101,51 +114,63 @@ async function getFeed(page) {
       duration:  v.duration,
     }));
 
-  feedCache.set(source, { items, ts: Date.now() });
-  console.log(`  ✓ page ${page}: ${items.length} shorts`);
+  feedCache.set(cacheKey, { items, ts: Date.now() });
+  console.log(`  ✓ page ${page} "${query}": ${items.length} shorts (filtered from ${raw.length})`);
+
+  // Kick off background downloads for the first few videos
+  items.slice(0, 4).forEach(item => downloadVideo(item.videoId).catch(() => {}));
+
   return items;
 }
 
-// ── Stream ──────────────────────────────────────────────────────────────────
+// ── Proxy (download 1080p video+audio, serve locally) ───────────────────────
 
-const streamCache   = new Map(); // videoId → { url, isHls, ts }
-const streamPending = new Map(); // videoId → Promise
-const STREAM_TTL_MS = 90 * 60 * 1000; // 90 min (YouTube URLs expire ~6hr)
+const PROXY_DIR    = os.tmpdir();
+const PROXY_TTL_MS = 90 * 60 * 1000;
+const proxyCache   = new Map(); // videoId → { filePath, ts }
+const proxyPending = new Map(); // videoId → Promise<filePath>
 
-function fetchStream(videoId) {
-  const hit = streamCache.get(videoId);
-  if (hit && Date.now() - hit.ts < STREAM_TTL_MS) return Promise.resolve(hit);
-  if (streamPending.has(videoId)) return streamPending.get(videoId);
+function downloadVideo(videoId) {
+  const hit = proxyCache.get(videoId);
+  if (hit && Date.now() - hit.ts < PROXY_TTL_MS) {
+    try { fs.accessSync(hit.filePath); return Promise.resolve(hit.filePath); } catch {}
+  }
+  if (proxyPending.has(videoId)) return proxyPending.get(videoId);
+
+  const filePath = path.join(PROXY_DIR, `yt_${videoId}.mp4`);
 
   const promise = (async () => {
-    // Force a direct HTTPS videoplayback URL — NOT HLS.
-    // HLS manifests (googlevideo.com) block XHR/fetch with CORS errors when
-    // loaded by HLS.js. A plain <video src> on the other hand skips CORS
-    // entirely, so a direct combined mp4 stream plays fine in any browser.
-    const [info] = await ytdlp([
-      `https://www.youtube.com/watch?v=${videoId}`,
-      '--dump-json',
-      '--no-warnings',
-      '--quiet',
-      '-f',
-      'best[height<=720][protocol=https][vcodec!=none][acodec!=none]' +
-      '/best[height<=720][protocol=https]' +
-      '/best[protocol=https]',
-    ], 30_000);
+    await new Promise((resolve, reject) => {
+      const proc = spawn(YTDLP, [
+        `https://www.youtube.com/watch?v=${videoId}`,
+        '-f',
+        // Prefer 1080p mp4 streams merged with m4a audio; fall back gracefully
+        'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]' +
+        '/bestvideo[height<=1080]+bestaudio' +
+        '/best[height<=1080]' +
+        '/best',
+        '--merge-output-format', 'mp4',
+        '-o', filePath,
+        '--no-warnings',
+        '--quiet',
+      ], { stdio: ['ignore', 'ignore', 'pipe'] });
 
-    if (!info?.url) throw new Error('no url');
+      const timer = setTimeout(() => { proc.kill('SIGKILL'); reject(new Error('timeout')); }, 120_000);
+      proc.on('close', code => {
+        clearTimeout(timer);
+        if (code === 0) resolve();
+        else reject(new Error(`yt-dlp exit ${code}`));
+      });
+      proc.on('error', err => { clearTimeout(timer); reject(err); });
+    });
 
-    const result = {
-      url: info.url,
-      ts:  Date.now(),
-    };
-    streamCache.set(videoId, result);
-    streamPending.delete(videoId);
-    return result;
+    proxyCache.set(videoId, { filePath, ts: Date.now() });
+    console.log(`  ✓ downloaded ${videoId}`);
+    return filePath;
   })();
 
-  streamPending.set(videoId, promise);
-  promise.catch(() => streamPending.delete(videoId));
+  proxyPending.set(videoId, promise);
+  promise.catch(() => {}).finally(() => proxyPending.delete(videoId));
   return promise;
 }
 
@@ -166,11 +191,13 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const p   = url.pathname;
 
-  // ── /api/feed?page=N ───────────────────────────────────────────────────
+  // ── /api/feed?page=N&location=... ─────────────────────────────────────
   if (p === '/api/feed') {
-    const page = Math.max(0, parseInt(url.searchParams.get('page') || '0', 10));
+    const page     = Math.max(0, parseInt(url.searchParams.get('page') || '0', 10));
+    const location = (url.searchParams.get('location') || '').trim().slice(0, 60);
+    if (!location) { jsonRes(res, { items: [], error: 'location required' }, 400); return; }
     try {
-      const items = await getFeed(page);
+      const items = await getFeed(page, location);
       jsonRes(res, { items });
     } catch (e) {
       console.error('[feed]', e.message);
@@ -179,16 +206,40 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // ── /api/stream?v=VIDEO_ID ─────────────────────────────────────────────
-  if (p === '/api/stream') {
+  // ── /api/proxy?v=VIDEO_ID — download + serve 1080p mp4 ───────────────────
+  if (p === '/api/proxy') {
     const v = url.searchParams.get('v') ?? '';
-    if (!/^[A-Za-z0-9_-]{5,15}$/.test(v)) { jsonRes(res, { error: 'bad id' }, 400); return; }
+    if (!/^[A-Za-z0-9_-]{5,15}$/.test(v)) { res.writeHead(400); res.end('bad id'); return; }
     try {
-      const stream = await fetchStream(v);
-      jsonRes(res, stream);
+      const filePath = await downloadVideo(v);
+      const fileSize = fs.statSync(filePath).size;
+      const range    = req.headers['range'];
+
+      if (range) {
+        const [, s, e] = range.match(/bytes=(\d+)-(\d*)/) || [];
+        const start    = parseInt(s, 10);
+        const end      = e ? parseInt(e, 10) : fileSize - 1;
+        res.writeHead(206, {
+          'Content-Range':             `bytes ${start}-${end}/${fileSize}`,
+          'Accept-Ranges':             'bytes',
+          'Content-Length':            String(end - start + 1),
+          'Content-Type':              'video/mp4',
+          'Access-Control-Allow-Origin': '*',
+        });
+        fs.createReadStream(filePath, { start, end }).pipe(res);
+      } else {
+        res.writeHead(200, {
+          'Content-Length':            String(fileSize),
+          'Accept-Ranges':             'bytes',
+          'Content-Type':              'video/mp4',
+          'Access-Control-Allow-Origin': '*',
+          'Cache-Control':             'no-store',
+        });
+        fs.createReadStream(filePath).pipe(res);
+      }
     } catch (e) {
-      console.error('[stream]', v, e.message);
-      jsonRes(res, { error: 'unavailable' }, 502);
+      console.error('[proxy]', v, e.message);
+      res.writeHead(502); res.end('unavailable');
     }
     return;
   }
@@ -223,9 +274,6 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`  Desktop  →  \x1b[36mhttp://localhost:${PORT}\x1b[0m`);
   if (lan) console.log(`  Phone    →  \x1b[36mhttp://${lan}:${PORT}\x1b[0m  (same WiFi)`);
   console.log('');
-
-  // Warm up first page in background
-  getFeed(0).catch(() => {});
 
   // Open desktop browser
   require('child_process').exec(`open http://localhost:${PORT}`);

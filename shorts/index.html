@@ -56,8 +56,46 @@
 
     <div id="feed"></div>
 
+    <!-- Location picker -->
+    <div id="location-picker">
+      <div class="lp-inner">
+        <svg class="lp-icon" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+        </svg>
+        <h1 class="lp-heading">Where do you want to go?</h1>
+        <p class="lp-sub">Get travel Shorts for any destination</p>
+        <form id="location-form" class="lp-form">
+          <input
+            id="location-input"
+            class="lp-input"
+            type="text"
+            placeholder="Paris, Bali, Japan…"
+            autocomplete="off"
+            spellcheck="false"
+            maxlength="60"
+            required
+          />
+          <button type="submit" class="lp-submit" aria-label="Go">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/>
+            </svg>
+          </button>
+        </form>
+        <div class="lp-chips">
+          <button class="lp-chip" data-loc="Tokyo">Tokyo</button>
+          <button class="lp-chip" data-loc="Paris">Paris</button>
+          <button class="lp-chip" data-loc="Bali">Bali</button>
+          <button class="lp-chip" data-loc="New York">New York</button>
+          <button class="lp-chip" data-loc="Iceland">Iceland</button>
+          <button class="lp-chip" data-loc="Thailand">Thailand</button>
+          <button class="lp-chip" data-loc="Italy">Italy</button>
+          <button class="lp-chip" data-loc="Maldives">Maldives</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Initial loading screen -->
-    <div id="initial-loading">
+    <div id="initial-loading" style="display:none">
       <div class="spinner"></div>
       <p>Loading Shorts…</p>
     </div>

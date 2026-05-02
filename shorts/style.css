@@ -378,6 +378,116 @@ html, body {
   }
 }
 
+/* ── Location Picker ── */
+#location-picker {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px 24px;
+}
+
+#location-picker.hidden { display: none; }
+
+.lp-inner {
+  width: 100%;
+  max-width: 380px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.lp-icon {
+  width: 52px;
+  height: 52px;
+  color: var(--red);
+  margin-bottom: 4px;
+}
+
+.lp-heading {
+  font-size: 24px;
+  font-weight: 700;
+  text-align: center;
+  letter-spacing: -.3px;
+}
+
+.lp-sub {
+  font-size: 14px;
+  color: rgba(255,255,255,.5);
+  text-align: center;
+  margin-bottom: 6px;
+}
+
+.lp-form {
+  width: 100%;
+  display: flex;
+  gap: 8px;
+}
+
+.lp-input {
+  flex: 1;
+  height: 50px;
+  border-radius: 25px;
+  border: 1.5px solid rgba(255,255,255,.2);
+  background: rgba(255,255,255,.08);
+  color: #fff;
+  font-size: 16px;
+  padding: 0 20px;
+  outline: none;
+  transition: border-color .2s;
+}
+
+.lp-input::placeholder { color: rgba(255,255,255,.35); }
+.lp-input:focus { border-color: rgba(255,255,255,.5); }
+
+.lp-submit {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  border: none;
+  background: var(--red);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background .15s, transform .1s;
+}
+
+.lp-submit:hover  { background: #e00; }
+.lp-submit:active { transform: scale(.92); }
+.lp-submit svg    { width: 22px; height: 22px; }
+
+.lp-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 6px;
+}
+
+.lp-chip {
+  padding: 6px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.2);
+  background: transparent;
+  color: rgba(255,255,255,.75);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+}
+
+.lp-chip:hover {
+  background: rgba(255,255,255,.12);
+  color: #fff;
+  border-color: rgba(255,255,255,.4);
+}
+
 /* ── Shared spinner ── */
 .spinner {
   width: 46px;
