@@ -92,6 +92,14 @@ function createCard(item) {
     </div>
   `;
 
+  // Fallback: maxresdefault may 404 for rare videos; swap to hqdefault silently
+  const thumbEl = card.querySelector('.card-thumb');
+  const testImg = new Image();
+  testImg.onerror = () => {
+    thumbEl.style.backgroundImage = `url('https://i.ytimg.com/vi/${videoId}/hqdefault.jpg')`;
+  };
+  testImg.src = thumbnail;
+
   card.addEventListener('click', e => {
     if (e.target.closest('a')) return;
     onCardClick(card);

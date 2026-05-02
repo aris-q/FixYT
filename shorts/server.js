@@ -108,7 +108,7 @@ async function getFeed(page, location) {
     .map(v => ({
       videoId:   v.id,
       title:     v.title || '',
-      thumbnail: v.thumbnail || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`,
+      thumbnail: `https://i.ytimg.com/vi/${v.id}/maxresdefault.jpg`,
       uploader:  v.uploader || v.channel || v.uploader_id || '',
       viewCount: v.view_count ?? null,
       duration:  v.duration,
@@ -142,7 +142,8 @@ function getStreamUrl(videoId) {
       `https://www.youtube.com/watch?v=${videoId}`,
       '--dump-json', '--no-warnings', '--quiet',
       '-f',
-      '22' +                                                           // 720p combined mp4 (YouTube format code)
+      'best[height<=1080][ext=mp4][vcodec!=none][acodec!=none]' +     // best combined ≤1080p mp4
+      '/22' +                                                           // 720p combined mp4 (YouTube format code)
       '/best[height<=720][ext=mp4][vcodec!=none][acodec!=none]' +     // any 720p combined mp4
       '/best[height<=480][ext=mp4][vcodec!=none][acodec!=none]' +     // 480p combined mp4
       '/18' +                                                          // 360p combined mp4 (YouTube format code)
