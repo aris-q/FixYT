@@ -127,6 +127,18 @@ function loadStream(card) {
     video.muted = state.globalMuted;
   }
 
+  // canplay may have already fired if prefetch completed while viewing a previous card
+  if (video.readyState >= 3) {
+    spinner.classList.remove('active');
+    card.dataset.streamLoaded = '1';
+    return Promise.resolve(true);
+  }
+
+  if (video.error) {
+    spinner.classList.remove('active');
+    return Promise.resolve(false);
+  }
+
   return new Promise(resolve => {
     video.addEventListener('canplay', () => {
       spinner.classList.remove('active');

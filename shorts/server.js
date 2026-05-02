@@ -117,60 +117,47 @@ async function getFeed(page, location) {
   feedCache.set(cacheKey, { items, ts: Date.now() });
   console.log(`  ✓ page ${page} "${query}": ${items.length} shorts (filtered from ${raw.length})`);
 
-  // Kick off background downloads for the first few videos
-  items.slice(0, 4).forEach(item => downloadVideo(item.videoId).catch(() => {}));
+  // Warm up CDN URLs for the first few videos before the client asks
+  items.slice(0, 4).forEach(item => getStreamUrl(item.videoId).catch(() => {}));
 
   return items;
 }
 
-// ── Proxy (download 1080p video+audio, serve locally) ───────────────────────
+// ── Stream URL resolver ──────────────────────────────────────────────────────
+// Gets the direct CDN URL for a video (720p combined mp4 — no merge needed).
+// The browser sets <video src="/api/proxy?v=ID">, we redirect to the CDN URL,
+// and the browser streams directly at full CDN speed with no server buffering.
 
-const PROXY_DIR    = os.tmpdir();
-const PROXY_TTL_MS = 90 * 60 * 1000;
-const proxyCache   = new Map(); // videoId → { filePath, ts }
-const proxyPending = new Map(); // videoId → Promise<filePath>
+const streamCache   = new Map(); // videoId → { url, ts }
+const streamPending = new Map(); // videoId → Promise<url>
+const STREAM_TTL_MS = 90 * 60 * 1000; // YouTube CDN URLs last ~6 hr; refresh after 90 min
 
-function downloadVideo(videoId) {
-  const hit = proxyCache.get(videoId);
-  if (hit && Date.now() - hit.ts < PROXY_TTL_MS) {
-    try { fs.accessSync(hit.filePath); return Promise.resolve(hit.filePath); } catch {}
-  }
-  if (proxyPending.has(videoId)) return proxyPending.get(videoId);
-
-  const filePath = path.join(PROXY_DIR, `yt_${videoId}.mp4`);
+function getStreamUrl(videoId) {
+  const hit = streamCache.get(videoId);
+  if (hit && Date.now() - hit.ts < STREAM_TTL_MS) return Promise.resolve(hit.url);
+  if (streamPending.has(videoId))                  return streamPending.get(videoId);
 
   const promise = (async () => {
-    await new Promise((resolve, reject) => {
-      const proc = spawn(YTDLP, [
-        `https://www.youtube.com/watch?v=${videoId}`,
-        '-f',
-        // Prefer 1080p mp4 streams merged with m4a audio; fall back gracefully
-        'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]' +
-        '/bestvideo[height<=1080]+bestaudio' +
-        '/best[height<=1080]' +
-        '/best',
-        '--merge-output-format', 'mp4',
-        '-o', filePath,
-        '--no-warnings',
-        '--quiet',
-      ], { stdio: ['ignore', 'ignore', 'pipe'] });
+    const [info] = await ytdlp([
+      `https://www.youtube.com/watch?v=${videoId}`,
+      '--dump-json', '--no-warnings', '--quiet',
+      '-f',
+      '22' +                                                           // 720p combined mp4 (YouTube format code)
+      '/best[height<=720][ext=mp4][vcodec!=none][acodec!=none]' +     // any 720p combined mp4
+      '/best[height<=480][ext=mp4][vcodec!=none][acodec!=none]' +     // 480p combined mp4
+      '/18' +                                                          // 360p combined mp4 (YouTube format code)
+      '/best[ext=mp4][vcodec!=none][acodec!=none]' +                  // any combined mp4
+      '/best[vcodec!=none][acodec!=none]' +                           // any combined stream
+      '/best',
+    ], 30_000);
 
-      const timer = setTimeout(() => { proc.kill('SIGKILL'); reject(new Error('timeout')); }, 120_000);
-      proc.on('close', code => {
-        clearTimeout(timer);
-        if (code === 0) resolve();
-        else reject(new Error(`yt-dlp exit ${code}`));
-      });
-      proc.on('error', err => { clearTimeout(timer); reject(err); });
-    });
-
-    proxyCache.set(videoId, { filePath, ts: Date.now() });
-    console.log(`  ✓ downloaded ${videoId}`);
-    return filePath;
+    if (!info?.url) throw new Error('no url');
+    streamCache.set(videoId, { url: info.url, ts: Date.now() });
+    return info.url;
   })();
 
-  proxyPending.set(videoId, promise);
-  promise.catch(() => {}).finally(() => proxyPending.delete(videoId));
+  streamPending.set(videoId, promise);
+  promise.catch(() => {}).finally(() => streamPending.delete(videoId));
   return promise;
 }
 
@@ -206,37 +193,14 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // ── /api/proxy?v=VIDEO_ID — download + serve 1080p mp4 ───────────────────
+  // ── /api/proxy?v=VIDEO_ID — resolve CDN URL and redirect ─────────────────
   if (p === '/api/proxy') {
     const v = url.searchParams.get('v') ?? '';
     if (!/^[A-Za-z0-9_-]{5,15}$/.test(v)) { res.writeHead(400); res.end('bad id'); return; }
     try {
-      const filePath = await downloadVideo(v);
-      const fileSize = fs.statSync(filePath).size;
-      const range    = req.headers['range'];
-
-      if (range) {
-        const [, s, e] = range.match(/bytes=(\d+)-(\d*)/) || [];
-        const start    = parseInt(s, 10);
-        const end      = e ? parseInt(e, 10) : fileSize - 1;
-        res.writeHead(206, {
-          'Content-Range':             `bytes ${start}-${end}/${fileSize}`,
-          'Accept-Ranges':             'bytes',
-          'Content-Length':            String(end - start + 1),
-          'Content-Type':              'video/mp4',
-          'Access-Control-Allow-Origin': '*',
-        });
-        fs.createReadStream(filePath, { start, end }).pipe(res);
-      } else {
-        res.writeHead(200, {
-          'Content-Length':            String(fileSize),
-          'Accept-Ranges':             'bytes',
-          'Content-Type':              'video/mp4',
-          'Access-Control-Allow-Origin': '*',
-          'Cache-Control':             'no-store',
-        });
-        fs.createReadStream(filePath).pipe(res);
-      }
+      const cdnUrl = await getStreamUrl(v);
+      res.writeHead(302, { 'Location': cdnUrl, 'Cache-Control': 'no-store' });
+      res.end();
     } catch (e) {
       console.error('[proxy]', v, e.message);
       res.writeHead(502); res.end('unavailable');
